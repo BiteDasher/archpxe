@@ -88,6 +88,8 @@ if [[ -n "$ISO_LINK" ]] && [[ "$1" != "-o" || "$1" != "--offline" ]]; then
 fi
 echo " ---> Turning off NetworkManager"
 systemctl stop NetworkManager 2>/dev/null || killall NetworkManager dhcpcd wpa_supplicant 2>/dev/null
+echo " ---> Turning off dnsmasq"
+systemctl stop dnsmasq 2>/dev/null || killall dnsmasq 2>/dev/null
 echo " ---> Creating dnsmasq config..."
 cat <<EOF > /etc/dnsmasq.pxe.conf
 # Listen only to the specified interface
@@ -142,7 +144,7 @@ EOF
 mv ../*.img ./
 mv ../x86_64/* ./
 echo "===> Turning on dnsmasq"
-dnsmasq -k --enable-dbus --user=dnsmasq --pid-file --conf-file=/etc/dnsmasq.pxe.conf &
+dnsmasq -k --user=dnsmasq --conf-file=/etc/dnsmasq.pxe.conf &
 echo "===> Starting darkhttpd"
 darkhttpd "$dir" &>/dev/null &
 echo "Done! Plug-in Ethernet to your second computer and boot using PXE"
