@@ -11,3 +11,6 @@ Execute `sudo archpxe --help`
 `dnsmasq` \
 `darkhttpd` \
 `curl` (for ISO download)
+
+## AUR git clone link:
+https://aur.archlinux.org/archpxe.git
