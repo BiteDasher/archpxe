@@ -1,0 +1,148 @@
+#!/bin/bash
+if [ "$(id -u)" -ne 0 ]; then
+	echo "This script should be run as root"
+	exit 1
+fi
+if [ ! "$(command -v dnsmasq)" ]; then
+	echo "dnsmasq not found"
+	exit 1
+fi
+if [ ! "$(command -v darkhttpd)" ]; then
+	echo "darkhttpd not found"
+	exit 1
+fi
+dir="/mnt/archiso"
+dir2="/mnt/archiso_"
+case "$1" in
+	-i|--interface)
+		interface="$2"
+		if [ -z "$ISO_LINK" ]; then
+			echo "The link to get the image is not specified"; exit 1
+		fi
+	        dldir="$(mktemp -d)"
+		echo "$dldir" > /tmp/archpxe
+		echo "$interface" > /tmp/archpxe_i
+		;;
+	-o|--offline)
+		iso="$2"
+		case "$3" in '-i'|'--interface') : ;; *) echo "Unknown argument: $3"; exit 1; ;; esac
+		if [ ! "$4" ]; then
+			echo "Interface name not specified"; exit 1
+		else
+			interface="$4"
+		fi
+		if [ ! -e "$iso" ]; then
+			echo "ISO image $2 not found"; exit 1
+		fi
+		echo "$interface" > /tmp/archpxe_i
+		;;
+	-e|--end)
+		umount -l "$dir2" 2>/dev/null
+		rm -rf "$dir"
+		rm -rf "$dir2"
+		[ -f /tmp/archpxe ] && rm -rf "$(cat /tmp/archpxe)"
+		interface="$(cat /tmp/archpxe_i)"
+		rm -rf "$(cat /tmp/archpxe_i)"
+		rm -rf  /tmp/archpxe{,_i}
+		rm -f /etc/dnsmasq.pxe.conf
+		killall dnsmasq darkhttpd 2>/dev/null
+		systemctl start NetworkManager 2>/dev/null || echo
+		ip addr del 192.168.0.1/24 dev $interface
+		echo "Done!"
+		exit 0
+		;;
+	-h|--help)
+		cat <<EOF
+usage: archpxe [options]
+
+  Options:
+   ISO_LINK="/url/to/iso"
+   -i|--interface <interface>                 The name of the Ethernet interface
+
+   -o|--offline <path/to/iso> -i <interface>  Install from locally downloaded iso
+
+   -e|--end				      Execute this after successfully booting into PXE
+
+archpxe allows you to quickly setup a PXE server to load Arch Linux using an ethernet cable (boot is supported only in legacy mode)
+EOF
+exit 0
+		;;
+	*) echo "Use $0 --help"; exit 1
+		;;
+esac
+trapcom() {
+rm -rf /tmp/archpxe{,_i}
+[ -n "$dldir" ] && rm -rf /tmp/"$dldir"
+rm -rf /mnt/archiso{,_}
+}
+trap trapcom SIGINT SIGTERM
+if [ ! "$(ls -w 1 /sys/class/net | grep -x "$interface")" ]; then
+	echo "Interface $interface not found"; exit 1
+fi
+[ ! -d "$dir" ] && mkdir -p "$dir" || { echo "$dir exists, aborting..."; exit 1; }
+[ ! -d "$dir2" ] && mkdir -p "$dir2" || { echo "$dir2 exists, aborting..."; exit 1; }
+if [[ -n "$ISO_LINK" ]] && [[ "$1" != "-o" || "$1" != "--offline" ]]; then
+		echo "===> Downloading image"
+		curl --progress-bar -S -L -o "$dldir"/archlinux.iso "$ISO_LINK" || { echo "Something went wrong"; exit 1; }
+		iso="$dldir/archlinux.iso"
+fi
+echo " ---> Turning off NetworkManager"
+systemctl stop NetworkManager 2>/dev/null || killall NetworkManager dhcpcd wpa_supplicant 2>/dev/null
+echo " ---> Creating dnsmasq config..."
+cat <<EOF > /etc/dnsmasq.pxe.conf
+# Listen only to the specified interface
+interface=$interface
+
+# Don't function as dns server
+port=0
+
+# tftp server setup
+enable-tftp
+tftp-root=/mnt/archiso
+
+# Log extra information about dhcp transactions (for debug purposes)
+log-dhcp
+dhcp-range=192.168.0.50,192.168.0.150
+dhcp-boot=/arch/boot/syslinux/lpxelinux.0
+EOF
+echo "===> Unpacking iso image"
+mount -o loop,ro "$iso" "$dir2"
+cd "$dir2"
+cp -r . "$dir"
+cd "$dir"
+umount "$dir2"
+echo "===> Configuring Ethernet"
+ip link set $interface up
+ip addr add 192.168.0.1/24 dev $interface
+echo "===> Configuring syslinux"
+mkdir "$dir"/arch/boot/syslinux
+cd "$dir"/syslinux
+cp -r . "$dir"/arch/boot/syslinux
+cd "$dir"/arch/boot/syslinux
+mkdir pxelinux.cfg
+cat <<EOF > pxelinux.cfg/default
+INCLUDE /archiso_head.cfg
+
+INCLUDE /archiso_http.cfg
+
+INCLUDE /archiso_tail.cfg
+EOF
+cat <<EOF > archiso_http.cfg
+LABEL arch64_http
+TEXT HELP
+Boot the Arch Linux live medium using HTTP.
+It allows you to install Arch Linux or perform system maintenance.
+ENDTEXT
+MENU LABEL Arch Linux install medium (x86_64, HTTP)
+LINUX vmlinuz-linux
+INITRD intel-ucode.img,amd-ucode.img,initramfs-linux.img
+APPEND archisobasedir=arch archiso_http_srv=http://\${pxeserver}/ checksum verify
+SYSAPPEND 3
+EOF
+mv ../*.img ./
+mv ../x86_64/* ./
+echo "===> Turning on dnsmasq"
+dnsmasq -k --enable-dbus --user=dnsmasq --pid-file --conf-file=/etc/dnsmasq.pxe.conf &
+echo "===> Starting darkhttpd"
+darkhttpd "$dir" &>/dev/null &
+echo "Done! Plug-in Ethernet to your second computer and boot using PXE"
