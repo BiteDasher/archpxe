@@ -3,3 +3,11 @@ Quick setup of PXE server to load Arch Linux using an ethernet cable (boot is su
 
 ## How to use?
 Execute `sudo archpxe --help`
+
+## Dependencies:
+`bash` \
+`coreutils` \
+`grep` \
+`dnsmasq` \
+`darkhttpd` \
+`curl` (for ISO download)
